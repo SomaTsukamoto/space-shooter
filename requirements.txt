@@ -1,0 +1,4 @@
+# pygame draws the game and reads the keyboard, mouse, and touch.
+# pygbag packages the same main.py so a phone browser can run it.
+pygame==2.6.1
+pygbag==0.9.3
