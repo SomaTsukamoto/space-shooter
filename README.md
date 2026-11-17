@@ -1,78 +1,87 @@
-# Space Shooter
+# Space Shooter — Neon Overdrive
 
-A small portrait space shooter made with Python and Pygame. Your ship stays at the bottom, enemies drift down from the top, and the ship fires on its own. It is meant to be played in a phone browser.
-
-Play it at https://somatsukamoto.github.io/space-shooter/ once GitHub Pages is switched on (see below).
+A portrait arcade shooter made with Python and Pygame, playable on a computer
+or packaged for a phone browser with pygbag. All ships and effects are drawn
+in code; no image downloads or asset files are required.
 
 ## How to play
 
-- Drag left and right anywhere on the screen to move the ship. The ship follows your finger; it does not jump to where you first touch.
-- On a computer, the left and right arrow keys (or A and D) move the ship.
-- Shots fire automatically.
-- Each enemy you destroy is worth 10 points.
-- If an enemy hits your ship, the game ends. Tap the screen, or press a key, to play again.
-- Your best score for this visit is kept until you close the page.
+- Drag left and right anywhere on the screen. Your ship follows the drag
+  without jumping to your finger. On a computer, use the arrow keys or A / D.
+- Your ship fires automatically. Dodge enemies and pink enemy bullets.
+- You have three shields, displayed at the top right. After taking a hit,
+  your ship flashes and is invulnerable briefly. The yellow triangle has a
+  forgiving collision area inside its body; its narrow tip is harmless.
+- Destroy enemies within three seconds of each other to build a combo.
+  Points increase from 10 to 20, 30, 40, then 50 per enemy at the x5 cap.
+- Every five kills drops a **P** pickup. Catch it for **12 seconds of triple
+  shot** with a faster firing rate. Another P refreshes the timer.
+- Every ninth kill drops an **H** pickup that restores one shield, up to three.
+  On kills that are multiples of both five and nine, P takes priority.
+- Green saucers charge a shot (look for the pink ring), then fire toward you.
+- After 25 seconds of ordinary combat, a **Dreadnought boss** arrives with
+  aimed five-bullet fans. Move after each volley to dodge it.
+- Defeat the boss to earn 1,000 points times the sector number, get both
+  pickups, and advance to a faster sector. There is no final sector.
+- When all shields are gone, tap or press a key to restart. Best score lasts
+  for the current session. Escape closes the desktop game.
 
-The picture is drawn at 360 by 640 pixels and scaled to fit the screen, so it stays tall on a phone.
+The logical screen is 360 × 640. The game uses a fixed 60 Hz simulation to
+keep movement and timers independent of the display frame rate. Slow frames
+are capped at six simulation steps to avoid a long catch-up after switching tabs.
 
-## Run it on your computer
+## Run on your computer
 
-You need Python 3.8 or newer.
-
-```bash
-pip install pygame pygbag
-python main.py
-```
-
-If the `python` command is not found, use `python3 main.py` instead. You can also install the pinned versions in `requirements.txt` with `pip install -r requirements.txt`.
-
-Close the window, or press Escape, to quit.
-
-## Build the web version
-
-[pygbag](https://pygame-web.github.io/) packages this game so a browser can run the Python code. From this folder:
-
-```bash
-pygbag .
-```
-
-If that command is not found, use `python -m pygbag .` (or `python3 -m pygbag .`). Then open http://localhost:8000 . The page asks you to click or tap before the game starts. That screen is part of pygbag, and it is what unlocks the page on a phone.
-
-To only write the website files, which is what GitHub Actions does:
+Python 3.12 or 3.13 is recommended for the pinned Pygame version.
+From this project folder, set up a local virtual environment once:
 
 ```bash
-pygbag --build --width 360 --height 640 --title "Space Shooter" .
+python3.13 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
 ```
 
-The site is written to `build/web`. The first load in a browser downloads the Python runtime, so it is slower than later visits.
+Then launch the game:
 
-## Publish on GitHub Pages
+```bash
+.venv/bin/python main.py
+```
 
-Pushes to the `main` branch run `.github/workflows/pages.yml`. That workflow builds the game and deploys the `build/web` folder with GitHub's Pages actions.
+After editing the code, save it, close the game, and run that command again.
+Dependencies only need reinstalling if `requirements.txt` changes.
 
-After this is merged, turn the site on yourself:
+## Browser version
 
-1. Open the repository **Settings**.
-2. Open **Pages**.
-3. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+```bash
+.venv/bin/python -m pygbag --width 360 --height 640 --title "Neon Overdrive" .
+```
 
-The game is then published at https://somatsukamoto.github.io/space-shooter/ . Nothing is deployed until that source is selected.
+Open http://localhost:8000 and click or tap the launch screen. The first visit
+needs to download the Python browser runtime. Internet access is required.
+Test touch controls on a real phone as well as on a desktop browser.
 
-## Files
+To build the static website:
 
-- `main.py` is the whole game. It creates the window, reads touch and keys, moves the ships, checks hits, and draws every frame.
-- `requirements.txt` lists the two libraries: `pygame` for playing on your computer, and `pygbag` for the browser build.
-- `.github/workflows/pages.yml` is the GitHub Actions workflow that builds `build/web` and deploys it to GitHub Pages.
-- `.gitignore` tells git to skip the build output and Python's cache files. The website is built on GitHub, not stored in the repository.
+```bash
+.venv/bin/python -m pygbag --build --width 360 --height 640 --title "Neon Overdrive" .
+```
 
-There are no image files. Ships, bullets, and stars are rectangles, circles, and polygons drawn in code.
+Output is written to `build/web`.
 
-## How the game loop works
+## GitHub Pages
 
-Each frame, `main` does three things in order:
+`.github/workflows/pages.yml` builds and deploys the browser version on pushes
+to `main`. In the repository's **Settings → Pages**, select **GitHub Actions**
+as the source. The configured site URL is
+https://somatsukamoto.github.io/space-shooter/ . Local edits become available
+there only after they are pushed and the deployment succeeds.
 
-1. **Input.** Read the touch, the mouse, or the keyboard.
-2. **Update.** Move the ship, the bullets, and the enemies, then see what hit.
-3. **Draw.** Paint the stars and the ships, then show the new picture.
+## Checks
 
-After drawing, the loop waits with `await asyncio.sleep(0)`. That hands the browser a chance to show the frame. Pygbag requires it. On your computer it just lets the loop share the machine. The same `main.py` runs in both places.
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+The tests use Pygame's dummy display and audio drivers. They cover scoring,
+combo expiry, the yellow dart's collision area, damage protection, upgrades,
+boss progression, restart, and a minute of simulated combat with rendering.
+They do not replace playing the game or testing a real phone browser.

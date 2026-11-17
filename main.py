@@ -13,6 +13,7 @@ Web build (what GitHub Actions runs):
 """
 
 import asyncio
+import math
 import random
 import sys
 
@@ -357,149 +358,367 @@ class Input:
             self.pointer_down = False
 
 
-class Game:
-    """Everything that changes while you play: ships, score, and game over."""
+class Particle:
+    def __init__(self, x, y, color, big=False):
+        self.x, self.y, self.color = x, y, color
+        angle = random.uniform(0, math.tau)
+        speed = random.uniform(1, 6 if big else 3.5)
+        self.vx, self.vy = math.cos(angle) * speed, math.sin(angle) * speed
+        self.life = self.total = random.randint(18, 40)
 
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+        self.vx *= .97
+        self.vy *= .97
+        self.life -= 1
+
+    def draw(self, screen):
+        color = tuple(int(c * self.life / self.total) for c in self.color)
+        pygame.draw.line(screen, color, (int(self.x), int(self.y)),
+                         (int(self.x - self.vx * 2), int(self.y - self.vy * 2)), 2)
+
+
+class Shot:
+    def __init__(self, x, y, vx=0, vy=-11, hostile=False):
+        self.x, self.y, self.vx, self.vy = x, y, vx, vy
+        self.hostile = hostile
+
+    def rect(self):
+        return pygame.Rect(int(self.x) - 3, int(self.y) - 5, 6, 10)
+
+    def update(self):
+        self.x += self.vx
+        self.y += self.vy
+
+    def draw(self, screen):
+        x, y = int(self.x), int(self.y)
+        if self.hostile:
+            pygame.draw.circle(screen, (90, 20, 65), (x, y), 7)
+            pygame.draw.circle(screen, (255, 75, 145), (x, y), 4)
+            pygame.draw.circle(screen, (255, 225, 235), (x, y), 2)
+        else:
+            pygame.draw.line(screen, (20, 90, 110), (x, y + 14), (x, y - 7), 7)
+            pygame.draw.line(screen, (90, 255, 240), (x, y + 8), (x, y - 7), 3)
+            pygame.draw.line(screen, (240, 255, 255), (x, y + 3), (x, y - 7))
+
+
+class Pickup:
+    def __init__(self, x, y, kind):
+        self.x, self.y, self.kind = x, y, kind
+        self.age = 0
+
+    def rect(self):
+        return pygame.Rect(int(self.x) - 15, int(self.y) - 15, 30, 30)
+
+    def update(self):
+        self.y += 1.8
+        self.age += 1
+
+    def draw(self, screen, font):
+        color = (80, 255, 220) if self.kind == 'P' else (255, 120, 200)
+        rect = self.rect()
+        pygame.draw.circle(screen, (15, 40, 55), rect.center, 18)
+        pygame.draw.rect(screen, color, rect, 2, border_radius=8)
+        icon = font.render(self.kind, True, color)
+        screen.blit(icon, icon.get_rect(center=rect.center))
+
+
+class Boss:
+    def __init__(self, wave):
+        self.x, self.y = WIDTH / 2, -70
+        self.age = 0
+        self.max_hp = self.hp = 100 + (wave - 1) * 30
+
+    def rect(self):
+        return pygame.Rect(int(self.x) - 65, int(self.y) - 28, 130, 56)
+
+    def update(self):
+        self.age += 1
+        self.y = min(126, self.y + 1.8)
+        self.x = WIDTH / 2 + math.sin(self.age / 75) * 85
+
+    def draw(self, screen):
+        x, y = self.x, self.y
+        points = [(x-68,y-15),(x-38,y-28),(x,y-12),(x+38,y-28),
+                  (x+68,y-15),(x+48,y+20),(x+18,y+12),(x,y+30),
+                  (x-18,y+12),(x-48,y+20)]
+        pygame.draw.polygon(screen, (85, 30, 100), points, 7)
+        pygame.draw.polygon(screen, (190, 60, 160), points)
+        pygame.draw.lines(screen, (255, 140, 220), False, points[:5], 2)
+        for offset in (-42, 0, 42):
+            pygame.draw.circle(screen, (45, 15, 65), (int(x+offset),int(y)), 11)
+            pygame.draw.circle(screen, (255, 220, 130), (int(x+offset),int(y)), 5)
+
+
+class Game:
+    """A fixed-step arcade game. All timers below count 60 Hz simulation ticks."""
     def __init__(self):
         self.best = 0
         self.font = pygame.font.Font(None, 28)
-        self.big_font = pygame.font.Font(None, 52)
-        self.small_font = pygame.font.Font(None, 22)
+        self.big_font = pygame.font.Font(None, 54)
+        self.small_font = pygame.font.Font(None, 20)
+        self.tiny_font = pygame.font.Font(None, 16)
+        self.world = pygame.Surface((WIDTH, HEIGHT))
+        self.background = pygame.Surface((WIDTH, HEIGHT))
+        for y in range(HEIGHT):
+            pygame.draw.line(self.background, (5+int(y/90), 7, 22+int(y/35)), (0,y), (WIDTH,y))
         self.shade = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
-        self.shade.fill((0, 0, 0, 120))
+        self.shade.fill((4, 4, 18, 210))
         self.reset()
 
     def reset(self):
         self.player = Player()
-        self.bullets = []
-        self.enemies = []
-        self.bursts = []
-        self.stars = [Star() for _ in range(48)]
-        self.score = 0
-        self.over = False
-        self.show_hint = True
+        self.bullets, self.enemy_shots, self.enemies = [], [], []
+        self.particles, self.pickups, self.popups = [], [], []
+        self.stars = [Star() for _ in range(64)]
+        self.score = self.kills = self.combo = self.combo_timer = 0
         self.frames = 0
-        self.spawn_timer = 40
+        self.hp = 3
+        self.invincible = self.power = self.flash = self.shake = 0
+        self.wave = 1
+        self.wave_time = 0
+        self.spawn_timer = 45
+        self.fire_timer = 0
+        self.boss = None
+        self.over = False
+        self.banner, self.banner_time = 'SECTOR 01', 150
+        self.over_time = 0
+
+    def notice(self, text, duration=120):
+        self.banner, self.banner_time = text, duration
+
+    def explode(self, x, y, color, big=False):
+        self.particles.extend(Particle(x,y,color,big) for _ in range(48 if big else 16))
+        # A hard cap keeps repeated explosions inexpensive on a phone.
+        self.particles = self.particles[-400:]
+        self.shake = max(self.shake, 10 if big else 3)
+
+    def damage(self):
+        if self.invincible or self.over:
+            return
+        self.hp -= 1
+        self.combo = self.combo_timer = 0
+        self.invincible = 110
+        self.flash, self.shake = 8, 12
+        self.explode(self.player.x, self.player.y, PLAYER_CORE, True)
+        if self.hp <= 0:
+            self.over = True
+            self.over_time = 0
+            self.best = max(self.best, self.score)
+
+    def _destroy(self, enemy):
+        enemy.alive = False
+        self.kills += 1
+        self.combo += 1
+        self.combo_timer = 180
+        points = 10 * min(5, self.combo)
+        self.score += points
+        self.best = max(self.best, self.score)
+        self.explode(enemy.x, enemy.y, enemy.core)
+        self.popups.append([enemy.x, enemy.y, f'+{points}', 40])
+        # Guaranteed upgrades, rather than waiting for a lucky drop.
+        if self.kills % 5 == 0:
+            self.pickups.append(Pickup(enemy.x, enemy.y, 'P'))
+        elif self.kills % 9 == 0:
+            self.pickups.append(Pickup(enemy.x, enemy.y, 'H'))
 
     def update(self, pointer):
         self.frames += 1
         for star in self.stars:
             star.update()
-        for burst in self.bursts:
-            burst.update()
-        self.bursts = [burst for burst in self.bursts if burst.life > 0]
-
+        for particle in self.particles:
+            particle.update()
+        self.particles = [p for p in self.particles if p.life > 0]
+        for popup in self.popups:
+            popup[1] -= .7
+            popup[3] -= 1
+        self.popups = [p for p in self.popups if p[3] > 0]
+        self.shake = max(0, self.shake - .4)
+        self.flash = max(0, self.flash - 1)
+        self.banner_time = max(0, self.banner_time - 1)
         if self.over:
-            # A new tap or key press starts a fresh run. Best score is kept.
-            if pointer.tapped:
+            self.over_time += 1
+            if pointer.tapped and self.over_time > 35:
                 self.reset()
             return
-
-        if self.frames > 180 or pointer.pointer_down or pointer.left or pointer.right:
-            self.show_hint = False
-
+        self.invincible = max(0, self.invincible - 1)
+        self.power = max(0, self.power - 1)
+        self.combo_timer = max(0, self.combo_timer - 1)
+        if not self.combo_timer:
+            self.combo = 0
         self.player.move(pointer)
-        self._fire()
-        self._spawn()
-        self._move_shots_and_enemies()
-        self._resolve_hits()
-
-    def _fire(self):
-        bullet = self.player.try_fire()
-        if bullet is not None:
-            self.bullets.append(bullet)
-
-    def _difficulty(self):
-        # Every 10 destroyed enemies, new enemies arrive a little faster.
-        step = self.score // (POINTS_PER_ENEMY * 10)
-        interval = max(24, 56 - step * 4)
-        speed = min(4.0, 1.65 + step * 0.22)
-        return interval, speed
-
-    def _spawn(self):
-        self.spawn_timer -= 1
-        if self.spawn_timer > 0:
-            return
-        interval, speed = self._difficulty()
-        self.spawn_timer = interval
-        kind = random.choice(list(ENEMIES))
-        margin = 36
-        x = random.randint(margin, WIDTH - margin)
-        self.enemies.append(Enemy(x, kind, speed))
-
-    def _move_shots_and_enemies(self):
-        for bullet in self.bullets:
-            bullet.update()
-        # Drop shots that have left the top of the screen.
-        self.bullets = [bullet for bullet in self.bullets if bullet.y > -20]
-
+        self.fire_timer -= 1
+        if self.fire_timer <= 0:
+            self.fire_timer = 8 if self.power else 12
+            angles = (-.23, 0, .23) if self.power else (0,)
+            for angle in angles:
+                self.bullets.append(Shot(self.player.x, self.player.y-24, math.sin(angle)*11, -math.cos(angle)*11))
+        self.wave_time += 1
+        if self.boss is None and self.wave_time >= 60 * 25:
+            self.boss = Boss(self.wave)
+            self.enemies.clear()
+            self.enemy_shots.clear()
+            self.notice('WARNING / BOSS INBOUND', 150)
+        if self.boss is None:
+            self.spawn_timer -= 1
+            if self.spawn_timer <= 0:
+                self.spawn_timer = max(22, 54 - self.wave*4)
+                kind = random.choice(list(ENEMIES))
+                enemy = Enemy(random.randint(32, WIDTH-32), kind, min(3.8, 1.7+self.wave*.2))
+                enemy.age = 0
+                self.enemies.append(enemy)
+        else:
+            self.boss.update()
+            if self.boss.y >= 126 and self.boss.age % max(30, 62-self.wave*3) == 0:
+                # Aimed fan: moving after the volley leaves a safe gap.
+                angle = math.atan2(self.player.y-self.boss.y, self.player.x-self.boss.x)
+                for offset in (-.5, -.25, 0, .25, .5):
+                    self.enemy_shots.append(Shot(self.boss.x, self.boss.y+26,
+                                                math.cos(angle+offset)*3,
+                                                math.sin(angle+offset)*3, True))
         for enemy in self.enemies:
             enemy.update()
-        # Enemies that fly past the ship are simply gone. Only a hit ends the game.
-        self.enemies = [enemy for enemy in self.enemies if enemy.y < HEIGHT + 40]
+            enemy.age += 1
+            if enemy.kind == 'saucer' and enemy.age == 100:
+                angle = math.atan2(self.player.y-enemy.y, self.player.x-enemy.x)
+                self.enemy_shots.append(Shot(enemy.x, enemy.y, math.cos(angle)*2.7, math.sin(angle)*2.7, True))
+        self.enemies = [e for e in self.enemies if e.y < HEIGHT+40]
+        for shot in self.bullets + self.enemy_shots:
+            shot.update()
+        self.bullets = [b for b in self.bullets if -30 < b.x < WIDTH+30 and -25 < b.y < HEIGHT+30]
+        self.enemy_shots = [b for b in self.enemy_shots if -30 < b.x < WIDTH+30 and -25 < b.y < HEIGHT+30]
+        self._resolve_hits()
+        if self.over:
+            return
+        for pickup in self.pickups[:]:
+            pickup.update()
+            if pickup.rect().colliderect(self.player.rect().inflate(12,12)):
+                if pickup.kind == 'P':
+                    self.power = 60 * 12
+                    self.notice('TRIPLE SHOT / 12 SEC', 90)
+                else:
+                    self.hp = min(3, self.hp+1)
+                    self.notice('SHIELD RESTORED', 90)
+                self.explode(pickup.x, pickup.y, PLAYER_CORE)
+                self.pickups.remove(pickup)
+            elif pickup.y > HEIGHT+30:
+                self.pickups.remove(pickup)
 
     def _resolve_hits(self):
-        # 当たり判定: 見た目より少し小さい矩形が重なったら命中
-        kept_bullets = []
-        for bullet in self.bullets:
-            hit = None
+        for bullet in self.bullets[:]:
             for enemy in self.enemies:
                 if enemy.alive and bullet.rect().colliderect(enemy.hitbox()):
-                    hit = enemy
+                    self._destroy(enemy)
+                    self.bullets.remove(bullet)
                     break
-            if hit is None:
-                kept_bullets.append(bullet)
             else:
-                self._destroy(hit)
-        self.bullets = kept_bullets
-        self.enemies = [enemy for enemy in self.enemies if enemy.alive]
-
-        # Bullets are checked first, so a shot on the same frame as a crash
-        # still counts as destroying that enemy.
+                if self.boss and bullet.rect().colliderect(self.boss.rect()):
+                    self.boss.hp -= 1
+                    self.bullets.remove(bullet)
+                    if self.boss.hp <= 0:
+                        x, y = self.boss.x, self.boss.y
+                        self.score += 1000 * self.wave
+                        self.best = max(self.best, self.score)
+                        self.explode(x, y, (255,110,210), True)
+                        self.flash = 10
+                        self.pickups.extend([Pickup(x-35,y,'P'),Pickup(x+35,y,'H')])
+                        self.boss = None
+                        self.enemy_shots.clear()
+                        self.wave += 1
+                        self.wave_time = 0
+                        self.spawn_timer = 80
+                        self.notice(f'SECTOR {self.wave:02d} / CLEAR +1000', 150)
+        self.enemies = [e for e in self.enemies if e.alive]
         for enemy in self.enemies:
-            if self.player.hitbox().colliderect(enemy.hitbox()):
-                self.over = True
-                self.bursts.append(Burst(self.player.x, self.player.y, PLAYER_CORE))
-                break
+            # The yellow dart's narrow tip and empty corners are harmless.
+            box = (pygame.Rect(int(enemy.x)-6,int(enemy.y)-14,12,18)
+                   if enemy.kind == 'dart' else enemy.hitbox())
+            if self.player.hitbox().colliderect(box):
+                self.damage()
+        if self.boss and self.player.hitbox().colliderect(self.boss.rect()):
+            self.damage()
+        for shot in self.enemy_shots[:]:
+            if self.player.hitbox().colliderect(shot.rect()):
+                self.enemy_shots.remove(shot)
+                self.damage()
 
-    def _destroy(self, enemy):
-        enemy.alive = False
-        self.score += POINTS_PER_ENEMY
-        if self.score > self.best:
-            self.best = self.score
-        self.bursts.append(Burst(enemy.x, enemy.y, enemy.core))
+    def text(self, screen, text, x, y, color=HINT_COLOR, font=None, center=False):
+        font = font or self.small_font
+        image = font.render(text, True, color)
+        rect = image.get_rect(midtop=(x,y)) if center else image.get_rect(topleft=(x,y))
+        screen.blit(font.render(text, True, (0,0,0)), rect.move(1,2))
+        screen.blit(image, rect)
 
     def draw(self, screen):
-        screen.fill(BLACK)
+        world = self.world
+        world.blit(self.background, (0,0))
+        # A scrolling perspective grid gives the starfield a sense of speed.
+        for x in range(-360, 721, 90):
+            pygame.draw.line(world, (19,20,47), (180+(x-180)*.15,180), (x,HEIGHT))
+        for i in range(10):
+            t = ((i/10 + self.frames/900) % 1) ** 2
+            y = int(180+t*(HEIGHT-180))
+            pygame.draw.line(world, (25,22,52), (0,y), (WIDTH,y))
         for star in self.stars:
-            star.draw(screen)
+            star.draw(world)
         for enemy in self.enemies:
-            enemy.draw(screen)
-        for bullet in self.bullets:
-            bullet.draw(screen)
-        self.player.draw(screen, self.frames)
-        for burst in self.bursts:
-            burst.draw(screen)
-
+            enemy.draw(world)
+            if enemy.kind == 'saucer' and 65 < enemy.age < 100:
+                pygame.draw.circle(world, (255,90,140), (int(enemy.x),int(enemy.y)), 26, 1)
+        if self.boss:
+            self.boss.draw(world)
+        for shot in self.bullets + self.enemy_shots:
+            shot.draw(world)
+        for pickup in self.pickups:
+            pickup.draw(world, self.font)
+        if not self.over and (not self.invincible or self.frames % 8 < 4):
+            if self.power:
+                pygame.draw.circle(world, (20,65,85), (int(self.player.x),int(self.player.y)), 29, 2)
+            self.player.draw(world, self.frames)
+        for particle in self.particles:
+            particle.draw(world)
+        for x,y,label,life in self.popups:
+            self.text(world,label,int(x),int(y),BULLET_GLOW,center=True)
+        screen.fill((6,7,22))
+        offset = (random.randint(-int(self.shake),int(self.shake)), random.randint(-int(self.shake),int(self.shake))) if self.shake >= 1 else (0,0)
+        screen.blit(world, offset)
+        if self.flash:
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((110,200,255,int(self.flash*9)))
+            screen.blit(overlay,(0,0))
+        pygame.draw.rect(screen, (8,12,28), (0,0,WIDTH,76))
+        pygame.draw.line(screen, (40,90,110), (14,75), (WIDTH-14,75))
+        self.text(screen,'NEON / OVERDRIVE',16,10,PLAYER_CORE,self.tiny_font)
+        self.text(screen,f'{self.score:06d}',16,29,(240,250,255),self.font)
+        self.text(screen,f'SECTOR {self.wave:02d}',250,10,HINT_COLOR,self.tiny_font)
+        for i in range(3):
+            rect = pygame.Rect(256+i*27,34,21,10)
+            pygame.draw.rect(screen, PLAYER_CORE if i < self.hp else (35,45,65),rect,border_radius=3)
+        if self.combo >= 2 and not self.over:
+            self.text(screen,f'{self.combo} CHAIN / x{min(5,self.combo)}',180,88,BULLET_GLOW,center=True)
+            pygame.draw.rect(screen,(65,48,35),(135,108,90,3))
+            pygame.draw.rect(screen,BULLET_GLOW,(135,108,int(90*self.combo_timer/180),3))
+        if self.boss:
+            self.text(screen,'DREADNOUGHT',180,81,GAME_OVER_COLOR,self.tiny_font,True)
+            pygame.draw.rect(screen,(55,25,55),(35,99,290,5))
+            pygame.draw.rect(screen,GAME_OVER_COLOR,(35,99,int(290*self.boss.hp/self.boss.max_hp),5))
+        if self.banner_time and not self.over:
+            self.text(screen,self.banner,180,213,PLAYER_CORE,center=True)
+            pygame.draw.line(screen,(35,95,110),(65,240),(295,240))
+        if self.frames < 180:
+            self.text(screen,'DRAG TO MOVE / AUTO FIRE',180,470,HINT_COLOR,center=True)
+            self.text(screen,'ARROWS OR A / D',180,493,HINT_COLOR,self.tiny_font,True)
+        if self.power and not self.over:
+            self.text(screen,f'TRIPLE SHOT  {math.ceil(self.power/60):02d}s',16,603,PLAYER_CORE,self.tiny_font)
+            pygame.draw.rect(screen,PLAYER_CORE,(16,622,int(328*self.power/720),3))
         if self.over:
-            screen.blit(self.shade, (0, 0))
-            self._draw_text(screen, self.big_font, "GAME OVER", 270, GAME_OVER_COLOR)
-            self._draw_text(screen, self.font, f"SCORE {self.score}", 320, SCORE_COLOR)
-            self._draw_text(screen, self.small_font, f"BEST {self.best}", 352, HINT_COLOR)
-            self._draw_text(screen, self.small_font, "Tap to restart", 400, HINT_COLOR)
-            return
-
-        self._draw_text(screen, self.font, f"SCORE {self.score}", 32, SCORE_COLOR)
-        if self.show_hint:
-            self._draw_text(screen, self.small_font, "Drag left and right", 300, HINT_COLOR)
-            self._draw_text(screen, self.small_font, "Arrow keys work too", 326, HINT_COLOR)
-
-    def _draw_text(self, screen, font, text, y, color):
-        shadow = font.render(text, True, BLACK)
-        image = font.render(text, True, color)
-        rect = image.get_rect(center=(WIDTH // 2, y))
-        screen.blit(shadow, rect.move(2, 2))
-        screen.blit(image, rect)
+            screen.blit(self.shade,(0,0))
+            self.text(screen,'SIGNAL LOST',180,226,GAME_OVER_COLOR,self.big_font,True)
+            self.text(screen,f'SCORE  {self.score:06d}',180,296,(240,250,255),self.font,True)
+            self.text(screen,f'BEST  {self.best:06d}  /  SECTOR {self.wave:02d}',180,335,HINT_COLOR,center=True)
+            pygame.draw.rect(screen,(40,160,170),(60,399,240,44),1,border_radius=8)
+            self.text(screen,'TAP / PRESS KEY TO RETRY',180,414,PLAYER_CORE,center=True)
 
 
 async def main():
@@ -507,26 +726,26 @@ async def main():
     fit_phone_browser()
     screen = open_window()
     clock = pygame.time.Clock()
-    game = Game()
-    controls = Input()
-
-    running = True
-    while running:
-        # ゲームループ: 毎フレーム「入力 → 更新 → 描画」を繰り返す
+    game, controls = Game(), Input()
+    accumulator = 0.0
+    pending_tap = False
+    while True:
+        # Fixed simulation steps keep speed stable when display FPS fluctuates.
+        accumulator += min(clock.tick(FPS)/1000, .1)
         controls.read()
+        pending_tap = pending_tap or controls.tapped
         if controls.quit:
-            running = False
             break
-
-        game.update(controls)
+        while accumulator >= 1/FPS:
+            controls.tapped = pending_tap
+            game.update(controls)
+            pending_tap = False
+            accumulator -= 1/FPS
         game.draw(screen)
         pygame.display.flip()
-        clock.tick(FPS)
-        # ブラウザに1フレーム描画させる（pygbagでは必須）
         await asyncio.sleep(0)
-
     pygame.quit()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     asyncio.run(main())
