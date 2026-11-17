@@ -518,9 +518,9 @@ class Game:
         self.explode(enemy.x, enemy.y, enemy.core)
         self.popups.append([enemy.x, enemy.y, f'+{points}', 40])
         # Guaranteed upgrades, rather than waiting for a lucky drop.
-        if self.kills % 5 == 0:
+        if self.kills % 10 == 0:
             self.pickups.append(Pickup(enemy.x, enemy.y, 'P'))
-        elif self.kills % 9 == 0:
+        elif self.kills % 18 == 0:
             self.pickups.append(Pickup(enemy.x, enemy.y, 'H'))
 
     def update(self, pointer):

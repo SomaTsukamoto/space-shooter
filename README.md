@@ -14,10 +14,10 @@ in code; no image downloads or asset files are required.
   forgiving collision area inside its body; its narrow tip is harmless.
 - Destroy enemies within three seconds of each other to build a combo.
   Points increase from 10 to 20, 30, 40, then 50 per enemy at the x5 cap.
-- Every five kills drops a **P** pickup. Catch it for **12 seconds of triple
+- Every ten kills drops a **P** pickup. Catch it for **12 seconds of triple
   shot** with a faster firing rate. Another P refreshes the timer.
-- Every ninth kill drops an **H** pickup that restores one shield, up to three.
-  On kills that are multiples of both five and nine, P takes priority.
+- Every eighteenth kill drops an **H** pickup that restores one shield, up to three.
+  On kills that are multiples of both ten and eighteen, P takes priority.
 - Green saucers charge a shot (look for the pink ring), then fire toward you.
 - After 25 seconds of ordinary combat, a **Dreadnought boss** arrives with
   aimed five-bullet fans. Move after each volley to dodge it.
